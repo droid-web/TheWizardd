@@ -1,183 +1,227 @@
-local RayfieldLibrary = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-if not RayfieldLibrary then return end
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+if not Rayfield then return end
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
-local Mouse = LocalPlayer:GetMouse()
 
 local conns = {}
-local espObjs = {}
+local espCache = {}
 
-local settings = {
-    aimbot = false,
-    esp = false,
-    fov = 120,
-    smooth = 4,
-    prediction = 0.14,
+local cfg = {
+    aimbotOn = false,
+    espOn = false,
+    fovSize = 120,
+    smooth = 0.15,
+    prediction = 0.165,
     aimPart = "Head",
     teamCheck = true,
-    wallCheck = true,
+    visCheck = true,
     showFov = true,
-    fovColor = Color3.fromRGB(255, 255, 255),
-    targetColor = Color3.fromRGB(0, 255, 0),
-    espColor = Color3.fromRGB(255, 50, 50),
-    espBox = true,
-    espName = true,
-    espHealth = true,
-    espDist = true,
+    showLine = true,
+    fovCol = Color3.new(1, 1, 1),
+    targetCol = Color3.new(0, 1, 0),
+    espCol = Color3.new(1, 0, 0),
+    boxOn = true,
+    nameOn = true,
+    healthOn = true,
+    distOn = true,
 }
 
-local currentTarget = nil
-
-local function getChar() return LocalPlayer.Character end
-local function getRoot() local c = getChar() return c and c:FindFirstChild("HumanoidRootPart") end
-
-local function getCharacters()
-    local chars = {}
+local function GetLocalCharacter()
+    local client = LocalPlayer
+    if not client then return nil end
     
-    if workspace:FindFirstChild("Characters") then
-        for _, char in pairs(workspace.Characters:GetChildren()) do
-            if char:FindFirstChild("HumanoidRootPart") then
-                table.insert(chars, char)
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name == client.Name then
+            if obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") then
+                return obj
+            end
+        end
+    end
+    
+    return client.Character
+end
+
+local function GetLocalRoot()
+    local char = GetLocalCharacter()
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+end
+
+local function GetEnemies()
+    local enemies = {}
+    local myName = LocalPlayer.Name
+    local myTeam = LocalPlayer.Team
+    
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name ~= myName then
+            local hum = obj:FindFirstChildOfClass("Humanoid")
+            local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso")
+            local head = obj:FindFirstChild("Head")
+            
+            if hum and root and head and hum.Health > 0 then
+                local plr = Players:FindFirstChild(obj.Name)
+                
+                if cfg.teamCheck and plr and myTeam then
+                    if plr.Team == myTeam then continue end
+                end
+                
+                table.insert(enemies, {
+                    model = obj,
+                    hum = hum,
+                    root = root,
+                    head = head,
+                    name = obj.Name,
+                    player = plr
+                })
             end
         end
     end
     
     for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            local dominated = false
-            for _, c in pairs(chars) do
-                if c.Name == plr.Name then dominated = true break end
+        if plr == LocalPlayer then continue end
+        if cfg.teamCheck and LocalPlayer.Team and plr.Team == LocalPlayer.Team then continue end
+        
+        local char = plr.Character
+        if not char then continue end
+        
+        local dominated = false
+        for _, e in pairs(enemies) do
+            if e.name == plr.Name then dominated = true break end
+        end
+        
+        if not dominated then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+            local head = char:FindFirstChild("Head")
+            
+            if hum and root and head and hum.Health > 0 then
+                table.insert(enemies, {
+                    model = char,
+                    hum = hum,
+                    root = root,
+                    head = head,
+                    name = plr.Name,
+                    player = plr
+                })
             end
-            if not dominated then table.insert(chars, plr.Character) end
         end
     end
     
-    return chars
+    return enemies
 end
 
-local function isEnemy(char)
-    if not settings.teamCheck then return true end
+local function IsVisible(origin, target)
+    if not cfg.visCheck then return true end
     
-    local plr = Players:FindFirstChild(char.Name)
-    if not plr then return true end
-    
-    if LocalPlayer.Team and plr.Team then
-        return LocalPlayer.Team ~= plr.Team
-    end
-    
-    return true
-end
-
-local function isAlive(char)
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    return hum and hum.Health > 0
-end
-
-local function isVisible(part)
-    if not settings.wallCheck then return true end
-    if not part then return false end
-    
-    local origin = Camera.CFrame.Position
+    local myChar = GetLocalCharacter()
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+    params.FilterDescendantsInstances = {myChar, Camera}
     
-    local result = workspace:Raycast(origin, (part.Position - origin).Unit * 2000, params)
+    local dir = (target - origin).Unit * 2000
+    local result = workspace:Raycast(origin, dir, params)
     
     if result then
-        return result.Instance:IsDescendantOf(part.Parent)
+        local hit = result.Instance
+        if hit:IsDescendantOf(target.Parent) then return true end
+        
+        for _, e in pairs(GetEnemies()) do
+            if hit:IsDescendantOf(e.model) then return true end
+        end
+        return false
     end
+    
     return true
 end
 
-local function getAimPart(char)
-    local parts = {settings.aimPart, "Head", "HumanoidRootPart", "Torso", "UpperTorso"}
-    for _, name in ipairs(parts) do
-        local part = char:FindFirstChild(name)
-        if part then return part end
-    end
-    return nil
+local function GetAimTarget(part)
+    if part == "Head" then return "Head"
+    elseif part == "Torso" then return "HumanoidRootPart"
+    else return "HumanoidRootPart" end
 end
 
-local function getPredictedPos(part, char)
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return part.Position end
-    
-    local vel = root.Velocity
-    return part.Position + (vel * settings.prediction)
+local function Predict(pos, vel)
+    return pos + (vel * cfg.prediction)
 end
 
-local function findTarget()
-    local best = settings.fov
-    local target = nil
-    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+local function FindBestTarget()
+    local best = nil
+    local bestDist = cfg.fovSize
+    local cx, cy = Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2
+    local center = Vector2.new(cx, cy)
     
-    for _, char in pairs(getCharacters()) do
-        if char == getChar() then continue end
-        if not isEnemy(char) then continue end
-        if not isAlive(char) then continue end
+    for _, enemy in pairs(GetEnemies()) do
+        local partName = GetAimTarget(cfg.aimPart)
+        local part = enemy.model:FindFirstChild(partName) or enemy.head
         
-        local part = getAimPart(char)
         if not part then continue end
-        if not isVisible(part) then continue end
         
-        local predicted = getPredictedPos(part, char)
-        local pos, onScreen = Camera:WorldToViewportPoint(predicted)
-        if not onScreen then continue end
+        local vel = enemy.root.Velocity
+        local predicted = Predict(part.Position, vel)
+        local screen, vis = Camera:WorldToViewportPoint(predicted)
         
-        local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
-        if dist < best then
-            best = dist
-            target = {part = part, char = char, screenPos = Vector2.new(pos.X, pos.Y)}
+        if not vis then continue end
+        if not IsVisible(Camera.CFrame.Position, part.Position) then continue end
+        
+        local dist = (Vector2.new(screen.X, screen.Y) - center).Magnitude
+        
+        if dist < bestDist then
+            bestDist = dist
+            best = {
+                enemy = enemy,
+                part = part,
+                predicted = predicted,
+                screen = Vector2.new(screen.X, screen.Y),
+                dist = dist
+            }
         end
     end
     
-    return target
+    return best
 end
 
-local Window = RayfieldLibrary:CreateWindow({
-    Name = "TheWizard - Phantom Forces",
-    Icon = 0,
+local Window = Rayfield:CreateWindow({
+    Name = "TheWizard PF",
     LoadingTitle = "TheWizard",
-    LoadingSubtitle = "Phantom Forces Edition",
+    LoadingSubtitle = "Phantom Forces",
     Theme = "Amethyst",
-    ConfigurationSaving = {Enabled = true, FolderName = "TheWizard", FileName = "pf_config"},
+    ConfigurationSaving = {Enabled = true, FolderName = "TheWizardPF", FileName = "config"},
     KeySystem = true,
     KeySettings = {
         Title = "TheWizard",
-        Subtitle = "Entrez la clé",
-        Note = "Clé : TheWizardBest",
-        FileName = "TheWizardKey",
+        Subtitle = "Clé requise",
+        Note = "TheWizardBest",
+        FileName = "twkey",
         SaveKey = true,
-        GrabKeyFromSite = false,
         Key = {"TheWizardBest"}
     }
 })
 
 local fovGui = Instance.new("ScreenGui")
-fovGui.Name = "twfov"
+fovGui.Name = "twpf"
 fovGui.ResetOnSpawn = false
 fovGui.IgnoreGuiInset = true
+fovGui.DisplayOrder = 9999
 pcall(function() fovGui.Parent = CoreGui end)
 if not fovGui.Parent then fovGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local fovCircle = Instance.new("ImageLabel")
-fovCircle.Name = "circle"
+fovCircle.Name = "fov"
 fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
 fovCircle.BackgroundTransparency = 1
 fovCircle.Image = "rbxassetid://3570695787"
-fovCircle.ImageTransparency = 0.6
+fovCircle.ImageTransparency = 0.5
 fovCircle.Parent = fovGui
 
 local targetLine = Instance.new("Frame")
 targetLine.Name = "line"
 targetLine.AnchorPoint = Vector2.new(0, 0.5)
-targetLine.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
 targetLine.BorderSizePixel = 0
 targetLine.Visible = false
 targetLine.Parent = fovGui
@@ -185,285 +229,287 @@ targetLine.Parent = fovGui
 local targetDot = Instance.new("Frame")
 targetDot.Name = "dot"
 targetDot.AnchorPoint = Vector2.new(0.5, 0.5)
-targetDot.Size = UDim2.new(0, 10, 0, 10)
-targetDot.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+targetDot.Size = UDim2.new(0, 8, 0, 8)
 targetDot.BorderSizePixel = 0
 targetDot.Visible = false
 targetDot.Parent = fovGui
 Instance.new("UICorner", targetDot).CornerRadius = UDim.new(1, 0)
 
-local tab1 = Window:CreateTab("AimBot", 4483362458)
-
-tab1:CreateSection("Principal")
+local tab1 = Window:CreateTab("Aimbot", 4483362458)
 
 tab1:CreateToggle({
-    Name = "Activer AimBot",
+    Name = "Activer",
     CurrentValue = false,
-    Flag = "aimbot",
-    Callback = function(v) settings.aimbot = v end,
+    Callback = function(v) cfg.aimbotOn = v end,
 })
 
 tab1:CreateDropdown({
-    Name = "Partie visée",
-    Options = {"Head", "HumanoidRootPart", "Torso"},
+    Name = "Viser",
+    Options = {"Head", "Torso"},
     CurrentOption = {"Head"},
-    Flag = "aimpart",
-    Callback = function(o) settings.aimPart = o[1] end,
+    Callback = function(o) cfg.aimPart = o[1] end,
 })
 
-tab1:CreateSection("FOV")
+tab1:CreateSlider({
+    Name = "FOV",
+    Range = {50, 300},
+    Increment = 5,
+    CurrentValue = 120,
+    Callback = function(v) cfg.fovSize = v end,
+})
 
 tab1:CreateSlider({
-    Name = "Taille FOV",
-    Range = {50, 400},
-    Increment = 10,
-    Suffix = " px",
-    CurrentValue = 120,
-    Flag = "fov",
-    Callback = function(v) settings.fov = v end,
+    Name = "Vitesse",
+    Range = {0.05, 0.5},
+    Increment = 0.01,
+    CurrentValue = 0.15,
+    Callback = function(v) cfg.smooth = v end,
+})
+
+tab1:CreateSlider({
+    Name = "Prédiction",
+    Range = {0.1, 0.3},
+    Increment = 0.005,
+    CurrentValue = 0.165,
+    Callback = function(v) cfg.prediction = v end,
+})
+
+tab1:CreateToggle({
+    Name = "Team Check",
+    CurrentValue = true,
+    Callback = function(v) cfg.teamCheck = v end,
+})
+
+tab1:CreateToggle({
+    Name = "Visibility Check",
+    CurrentValue = true,
+    Callback = function(v) cfg.visCheck = v end,
 })
 
 tab1:CreateToggle({
     Name = "Afficher FOV",
     CurrentValue = true,
-    Flag = "showfov",
-    Callback = function(v) settings.showFov = v end,
+    Callback = function(v) cfg.showFov = v end,
+})
+
+tab1:CreateToggle({
+    Name = "Ligne vers cible",
+    CurrentValue = true,
+    Callback = function(v) cfg.showLine = v end,
 })
 
 tab1:CreateColorPicker({
     Name = "Couleur FOV",
-    Color = Color3.fromRGB(255, 255, 255),
-    Flag = "fovcolor",
-    Callback = function(c) settings.fovColor = c end,
+    Color = Color3.new(1, 1, 1),
+    Callback = function(c) cfg.fovCol = c end,
 })
 
 tab1:CreateColorPicker({
-    Name = "Couleur Cible",
-    Color = Color3.fromRGB(0, 255, 0),
-    Flag = "targetcolor",
-    Callback = function(c) settings.targetColor = c end,
-})
-
-tab1:CreateSection("Précision")
-
-tab1:CreateSlider({
-    Name = "Smoothness",
-    Range = {1, 10},
-    Increment = 0.5,
-    CurrentValue = 4,
-    Flag = "smooth",
-    Callback = function(v) settings.smooth = v end,
-})
-
-tab1:CreateSlider({
-    Name = "Prédiction",
-    Range = {0, 0.25},
-    Increment = 0.01,
-    CurrentValue = 0.14,
-    Flag = "prediction",
-    Callback = function(v) settings.prediction = v end,
-})
-
-tab1:CreateSection("Filtres")
-
-tab1:CreateToggle({
-    Name = "Team Check",
-    CurrentValue = true,
-    Flag = "teamcheck",
-    Callback = function(v) settings.teamCheck = v end,
-})
-
-tab1:CreateToggle({
-    Name = "Wall Check",
-    CurrentValue = true,
-    Flag = "wallcheck",
-    Callback = function(v) settings.wallCheck = v end,
+    Name = "Couleur cible",
+    Color = Color3.new(0, 1, 0),
+    Callback = function(c) cfg.targetCol = c end,
 })
 
 local tab2 = Window:CreateTab("ESP", 4483362458)
 
-tab2:CreateSection("Principal")
-
 tab2:CreateToggle({
-    Name = "Activer ESP",
+    Name = "Activer",
     CurrentValue = false,
-    Flag = "esp",
-    Callback = function(v) settings.esp = v end,
+    Callback = function(v) cfg.espOn = v end,
 })
-
-tab2:CreateColorPicker({
-    Name = "Couleur ESP",
-    Color = Color3.fromRGB(255, 50, 50),
-    Flag = "espcolor",
-    Callback = function(c) settings.espColor = c end,
-})
-
-tab2:CreateSection("Affichage")
 
 tab2:CreateToggle({
     Name = "Box",
     CurrentValue = true,
-    Flag = "espbox",
-    Callback = function(v) settings.espBox = v end,
+    Callback = function(v) cfg.boxOn = v end,
 })
 
 tab2:CreateToggle({
     Name = "Nom",
     CurrentValue = true,
-    Flag = "espname",
-    Callback = function(v) settings.espName = v end,
+    Callback = function(v) cfg.nameOn = v end,
 })
 
 tab2:CreateToggle({
     Name = "Santé",
     CurrentValue = true,
-    Flag = "esphealth",
-    Callback = function(v) settings.espHealth = v end,
+    Callback = function(v) cfg.healthOn = v end,
 })
 
 tab2:CreateToggle({
     Name = "Distance",
     CurrentValue = true,
-    Flag = "espdist",
-    Callback = function(v) settings.espDist = v end,
+    Callback = function(v) cfg.distOn = v end,
 })
 
-local tab3 = Window:CreateTab("Paramètres", 4483362458)
+tab2:CreateColorPicker({
+    Name = "Couleur",
+    Color = Color3.new(1, 0, 0),
+    Callback = function(c) cfg.espCol = c end,
+})
 
-tab3:CreateSection("Info")
+local tab3 = Window:CreateTab("Info", 4483362458)
 
 tab3:CreateParagraph({
-    Title = "TheWizard",
-    Content = "Version: PF Edition\nClé: TheWizardBest\n\nMaintiens CLIC DROIT pour activer l'aimbot"
+    Title = "Comment utiliser",
+    Content = "1. Active l'Aimbot\n2. Maintiens CLIC DROIT pour viser\n3. Active l'ESP pour voir les ennemis\n\nConfig recommandée PF:\n- FOV: 100-150\n- Vitesse: 0.12-0.18\n- Prédiction: 0.15-0.18"
 })
 
 tab3:CreateButton({
-    Name = "Fermer le script",
+    Name = "Config Sniper",
     Callback = function()
-        for _, c in pairs(conns) do pcall(function() c:Disconnect() end) end
-        for _, o in pairs(espObjs) do pcall(function() if o.bb then o.bb:Destroy() end if o.hl then o.hl:Destroy() end end) end
-        pcall(function() fovGui:Destroy() end)
-        pcall(function() RayfieldLibrary:Destroy() end)
+        cfg.fovSize = 80
+        cfg.smooth = 0.2
+        cfg.prediction = 0.2
+        cfg.aimPart = "Head"
+        Rayfield:Notify({Title = "Config", Content = "Sniper appliquée", Duration = 2})
     end,
 })
 
-local function getHealthColor(pct)
-    if pct > 70 then return Color3.fromRGB(0, 255, 0)
-    elseif pct > 40 then return Color3.fromRGB(255, 255, 0)
-    else return Color3.fromRGB(255, 0, 0) end
-end
+tab3:CreateButton({
+    Name = "Config Rush",
+    Callback = function()
+        cfg.fovSize = 150
+        cfg.smooth = 0.1
+        cfg.prediction = 0.14
+        cfg.aimPart = "Torso"
+        Rayfield:Notify({Title = "Config", Content = "Rush appliquée", Duration = 2})
+    end,
+})
 
-local function updateESP()
-    for name, obj in pairs(espObjs) do
-        if obj.bb then obj.bb.Enabled = false end
-        if obj.hl then obj.hl.Enabled = false end
+tab3:CreateButton({
+    Name = "Config Équilibrée",
+    Callback = function()
+        cfg.fovSize = 120
+        cfg.smooth = 0.15
+        cfg.prediction = 0.165
+        cfg.aimPart = "Head"
+        Rayfield:Notify({Title = "Config", Content = "Équilibrée appliquée", Duration = 2})
+    end,
+})
+
+tab3:CreateButton({
+    Name = "Fermer",
+    Callback = function()
+        for _, c in pairs(conns) do pcall(function() c:Disconnect() end) end
+        for _, e in pairs(espCache) do pcall(function() e:Destroy() end) end
+        pcall(function() fovGui:Destroy() end)
+        pcall(function() Rayfield:Destroy() end)
+    end,
+})
+
+local function UpdateESP()
+    for _, e in pairs(espCache) do
+        pcall(function() e.Enabled = false end)
     end
     
-    if not settings.esp then return end
+    if not cfg.espOn then return end
     
-    local myRoot = getRoot()
+    local myRoot = GetLocalRoot()
     
-    for _, char in pairs(getCharacters()) do
-        if char == getChar() then continue end
-        if not isEnemy(char) then continue end
-        if not isAlive(char) then continue end
+    for _, enemy in pairs(GetEnemies()) do
+        local name = enemy.name
         
-        local name = char.Name
-        local root = char:FindFirstChild("HumanoidRootPart")
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        
-        if not root or not hum then continue end
-        
-        if not espObjs[name] then
+        if not espCache[name] then
             local bb = Instance.new("BillboardGui")
-            bb.Name = "twesp"
+            bb.Name = name
             bb.Size = UDim2.new(0, 150, 0, 50)
             bb.StudsOffset = Vector3.new(0, 2.5, 0)
             bb.AlwaysOnTop = true
-            bb.Adornee = root
             bb.Parent = CoreGui
             
-            local frame = Instance.new("Frame")
-            frame.Size = UDim2.new(1, 0, 1, 0)
-            frame.BackgroundTransparency = 1
-            frame.Parent = bb
+            local f = Instance.new("Frame")
+            f.Size = UDim2.new(1, 0, 1, 0)
+            f.BackgroundTransparency = 1
+            f.Parent = bb
             
-            local nm = Instance.new("TextLabel")
-            nm.Name = "name"
-            nm.Size = UDim2.new(1, 0, 0, 16)
-            nm.BackgroundTransparency = 1
-            nm.TextColor3 = settings.espColor
-            nm.TextStrokeTransparency = 0
-            nm.Font = Enum.Font.GothamBold
-            nm.TextSize = 13
-            nm.Parent = frame
+            local n = Instance.new("TextLabel")
+            n.Name = "n"
+            n.Size = UDim2.new(1, 0, 0, 14)
+            n.BackgroundTransparency = 1
+            n.TextStrokeTransparency = 0
+            n.Font = Enum.Font.GothamBold
+            n.TextSize = 13
+            n.Parent = f
             
-            local hpBg = Instance.new("Frame")
-            hpBg.Name = "hpbg"
-            hpBg.Size = UDim2.new(0.7, 0, 0, 5)
-            hpBg.Position = UDim2.new(0.15, 0, 0, 18)
-            hpBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-            hpBg.BorderSizePixel = 0
-            hpBg.Parent = frame
-            Instance.new("UICorner", hpBg).CornerRadius = UDim.new(0, 2)
+            local hpbg = Instance.new("Frame")
+            hpbg.Name = "hpbg"
+            hpbg.Size = UDim2.new(0.7, 0, 0, 4)
+            hpbg.Position = UDim2.new(0.15, 0, 0, 16)
+            hpbg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+            hpbg.BorderSizePixel = 0
+            hpbg.Parent = f
             
-            local hpBar = Instance.new("Frame")
-            hpBar.Name = "hp"
-            hpBar.Size = UDim2.new(1, 0, 1, 0)
-            hpBar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-            hpBar.BorderSizePixel = 0
-            hpBar.Parent = hpBg
-            Instance.new("UICorner", hpBar).CornerRadius = UDim.new(0, 2)
+            local hp = Instance.new("Frame")
+            hp.Name = "hp"
+            hp.Size = UDim2.new(1, 0, 1, 0)
+            hp.BorderSizePixel = 0
+            hp.Parent = hpbg
             
-            local dist = Instance.new("TextLabel")
-            dist.Name = "dist"
-            dist.Size = UDim2.new(1, 0, 0, 14)
-            dist.Position = UDim2.new(0, 0, 0, 26)
-            dist.BackgroundTransparency = 1
-            dist.TextColor3 = Color3.fromRGB(200, 200, 200)
-            dist.TextStrokeTransparency = 0
-            dist.Font = Enum.Font.Gotham
-            dist.TextSize = 11
-            dist.Parent = frame
+            local d = Instance.new("TextLabel")
+            d.Name = "d"
+            d.Size = UDim2.new(1, 0, 0, 12)
+            d.Position = UDim2.new(0, 0, 0, 22)
+            d.BackgroundTransparency = 1
+            d.TextStrokeTransparency = 0
+            d.Font = Enum.Font.Gotham
+            d.TextSize = 11
+            d.TextColor3 = Color3.fromRGB(200, 200, 200)
+            d.Parent = f
             
             local hl = Instance.new("Highlight")
-            hl.Name = "twhl"
+            hl.Name = "hl"
             hl.FillTransparency = 0.75
-            hl.OutlineTransparency = 0
             hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            hl.Adornee = char
-            hl.Parent = CoreGui
+            hl.Parent = bb
             
-            espObjs[name] = {bb = bb, hl = hl, nm = nm, hpBar = hpBar, dist = dist, frame = frame}
+            espCache[name] = bb
         end
         
-        local obj = espObjs[name]
-        obj.bb.Adornee = root
-        obj.hl.Adornee = char
-        obj.bb.Enabled = true
-        obj.hl.Enabled = settings.espBox
+        local bb = espCache[name]
+        bb.Adornee = enemy.root
+        bb.Enabled = true
         
-        obj.hl.FillColor = settings.espColor
-        obj.hl.OutlineColor = settings.espColor
+        local f = bb:FindFirstChild("Frame")
+        local hl = bb:FindFirstChild("hl")
         
-        local pct = math.clamp((hum.Health / hum.MaxHealth) * 100, 0, 100)
-        
-        if obj.nm then
-            obj.nm.Text = settings.espName and name or ""
-            obj.nm.TextColor3 = settings.espColor
-            obj.nm.Visible = settings.espName
+        if hl then
+            hl.Adornee = enemy.model
+            hl.Enabled = cfg.boxOn
+            hl.FillColor = cfg.espCol
+            hl.OutlineColor = cfg.espCol
         end
         
-        if obj.hpBar then
-            obj.hpBar.Size = UDim2.new(pct / 100, 0, 1, 0)
-            obj.hpBar.BackgroundColor3 = getHealthColor(pct)
-            obj.hpBar.Parent.Visible = settings.espHealth
-        end
-        
-        if obj.dist and myRoot then
-            local d = (myRoot.Position - root.Position).Magnitude
-            obj.dist.Text = settings.espDist and ("[" .. math.floor(d) .. "m]") or ""
-            obj.dist.Visible = settings.espDist
+        if f then
+            local n = f:FindFirstChild("n")
+            local hpbg = f:FindFirstChild("hpbg")
+            local d = f:FindFirstChild("d")
+            
+            if n then
+                n.Text = cfg.nameOn and name or ""
+                n.TextColor3 = cfg.espCol
+                n.Visible = cfg.nameOn
+            end
+            
+            if hpbg then
+                local hp = hpbg:FindFirstChild("hp")
+                local pct = math.clamp(enemy.hum.Health / enemy.hum.MaxHealth, 0, 1)
+                
+                if hp then
+                    hp.Size = UDim2.new(pct, 0, 1, 0)
+                    if pct > 0.6 then hp.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+                    elseif pct > 0.3 then hp.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+                    else hp.BackgroundColor3 = Color3.fromRGB(255, 0, 0) end
+                end
+                
+                hpbg.Visible = cfg.healthOn
+            end
+            
+            if d and myRoot then
+                local dist = (myRoot.Position - enemy.root.Position).Magnitude
+                d.Text = cfg.distOn and string.format("[%dm]", math.floor(dist)) or ""
+                d.Visible = cfg.distOn
+            end
         end
     end
 end
@@ -473,58 +519,56 @@ conns["main"] = RunService.RenderStepped:Connect(function()
     local cy = Camera.ViewportSize.Y / 2
     
     fovCircle.Position = UDim2.new(0, cx, 0, cy)
-    fovCircle.Size = UDim2.new(0, settings.fov * 2, 0, settings.fov * 2)
-    fovCircle.ImageColor3 = settings.fovColor
-    fovCircle.Visible = settings.aimbot and settings.showFov
+    fovCircle.Size = UDim2.new(0, cfg.fovSize * 2, 0, cfg.fovSize * 2)
+    fovCircle.ImageColor3 = cfg.fovCol
+    fovCircle.Visible = cfg.aimbotOn and cfg.showFov
     
     targetLine.Visible = false
     targetDot.Visible = false
     
-    if settings.aimbot and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-        local target = findTarget()
+    if cfg.aimbotOn and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        local target = FindBestTarget()
         
         if target then
-            currentTarget = target
+            fovCircle.ImageColor3 = cfg.targetCol
             
-            fovCircle.ImageColor3 = settings.targetColor
+            local screen = target.screen
+            local dx = screen.X - cx
+            local dy = screen.Y - cy
             
-            local predicted = getPredictedPos(target.part, target.char)
-            local pos = Camera:WorldToViewportPoint(predicted)
+            if cfg.showLine then
+                local len = math.sqrt(dx * dx + dy * dy)
+                local ang = math.deg(math.atan2(dy, dx))
+                
+                targetLine.Position = UDim2.new(0, cx, 0, cy)
+                targetLine.Size = UDim2.new(0, len, 0, 2)
+                targetLine.Rotation = ang
+                targetLine.BackgroundColor3 = cfg.targetCol
+                targetLine.Visible = true
+                
+                targetDot.Position = UDim2.new(0, screen.X, 0, screen.Y)
+                targetDot.BackgroundColor3 = cfg.targetCol
+                targetDot.Visible = true
+            end
             
-            local dx = pos.X - cx
-            local dy = pos.Y - cy
-            local len = math.sqrt(dx * dx + dy * dy)
-            local angle = math.deg(math.atan2(dy, dx))
+            local moveX = dx * cfg.smooth
+            local moveY = dy * cfg.smooth
             
-            targetLine.Position = UDim2.new(0, cx, 0, cy)
-            targetLine.Size = UDim2.new(0, len, 0, 2)
-            targetLine.Rotation = angle
-            targetLine.BackgroundColor3 = settings.targetColor
-            targetLine.Visible = true
-            
-            targetDot.Position = UDim2.new(0, pos.X, 0, pos.Y)
-            targetDot.BackgroundColor3 = settings.targetColor
-            targetDot.Visible = true
-            
-            local smoothFactor = 11 - settings.smooth
-            local aimX = dx / (smoothFactor * 6)
-            local aimY = dy / (smoothFactor * 6)
-            
-            Camera.CFrame = Camera.CFrame * CFrame.Angles(math.rad(-aimY), math.rad(-aimX), 0)
-        else
-            currentTarget = nil
+            Camera.CFrame = Camera.CFrame * CFrame.Angles(
+                math.rad(-moveY * 0.1),
+                math.rad(-moveX * 0.1),
+                0
+            )
         end
-    else
-        currentTarget = nil
     end
     
-    updateESP()
+    UpdateESP()
 end)
 
-RayfieldLibrary:Notify({
-    Title = "TheWizard",
-    Content = "Phantom Forces Edition chargé!\nClic droit = AimBot",
+Rayfield:Notify({
+    Title = "TheWizard PF",
+    Content = "Chargé! Clic droit = Aim",
     Duration = 5,
 })
 
-pcall(function() RayfieldLibrary:LoadConfiguration() end)
+pcall(function() Rayfield:LoadConfiguration() end)
