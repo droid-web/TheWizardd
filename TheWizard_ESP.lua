@@ -22,9 +22,14 @@ pcall(function() VirtualUser = game:GetService("VirtualUser") end)
 
 local noclip, godmode, esp, aimbot, crosshair = false, false, false, false, false
 local espColor = Color3.fromRGB(255, 0, 0)
-local aimFov, aimSmooth = 100, 3
+local espBox, espName, espHealth, espDist, espTracer, espSkeleton = true, true, true, true, false, false
+local aimFov, aimSmooth, aimPrediction = 150, 5, 0.12
+local aimPart = "Head"
+local aimKey = Enum.UserInputType.MouseButton2
+local aimWallCheck, aimTeamCheck, aimShowFov = true, false, true
 local chSize = 10
 local chColor = Color3.fromRGB(255, 255, 255)
+local flying, flyspeed = false, 50
 
 local conns = {}
 local espObjs = {}
@@ -50,17 +55,28 @@ local function getHum() local c = getChar() return c and c:FindFirstChildOfClass
 local function getRoot() local c = getChar() return c and c:FindFirstChild("HumanoidRootPart") end
 
 local function disconn(n)
-    if conns[n] then
-        pcall(function() conns[n]:Disconnect() end)
-        conns[n] = nil
-    end
+    if conns[n] then pcall(function() conns[n]:Disconnect() end) conns[n] = nil end
+end
+
+local function isTeammate(plr)
+    if not aimTeamCheck then return false end
+    return plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team
+end
+
+local function isVisible(part)
+    if not aimWallCheck then return true end
+    local origin = Camera.CFrame.Position
+    local dir = (part.Position - origin).Unit * (part.Position - origin).Magnitude
+    local ray = Ray.new(origin, dir)
+    local hit = workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character, Camera})
+    return hit == nil or hit:IsDescendantOf(part.Parent)
 end
 
 local Window = RayfieldLibrary:CreateWindow({
     Name = "TheWizard",
     Icon = 0,
-    LoadingTitle = "Chargement...",
-    LoadingSubtitle = "par TheWizard",
+    LoadingTitle = "TheWizard",
+    LoadingSubtitle = "Chargement...",
     Theme = "Amethyst",
     DisableRayfieldPrompts = false,
     DisableBuildWarnings = false,
@@ -70,7 +86,16 @@ local Window = RayfieldLibrary:CreateWindow({
         FileName = "config"
     },
     Discord = {Enabled = false, Invite = "noinvite", RememberJoins = true},
-    KeySystem = false,
+    KeySystem = true,
+    KeySettings = {
+        Title = "TheWizard - Authentification",
+        Subtitle = "Entrez la clé pour accéder",
+        Note = "Contactez le développeur pour obtenir une clé",
+        FileName = "TheWizardKey",
+        SaveKey = true,
+        GrabKeyFromSite = false,
+        Key = {"TheWizardBest"}
+    }
 })
 
 local tab1 = Window:CreateTab("Principal", 4483362458)
@@ -80,10 +105,7 @@ tab1:CreateButton({
     Name = "TP Spawn",
     Callback = function()
         local r = getRoot()
-        if r then
-            r.CFrame = CFrame.new(0, 5, 0)
-            notify("TP", "Spawn")
-        end
+        if r then r.CFrame = CFrame.new(0, 5, 0) notify("TP", "Spawn") end
     end,
 })
 
@@ -98,20 +120,12 @@ tab1:CreateToggle({
             conns["noclip"] = RunService.Stepped:Connect(function()
                 if noclip then
                     local c = getChar()
-                    if c then
-                        for _, p in pairs(c:GetDescendants()) do
-                            if p:IsA("BasePart") then p.CanCollide = false end
-                        end
-                    end
+                    if c then for _, p in pairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end end
                 end
             end)
         else
             local c = getChar()
-            if c then
-                for _, p in pairs(c:GetDescendants()) do
-                    if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then p.CanCollide = true end
-                end
-            end
+            if c then for _, p in pairs(c:GetDescendants()) do if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then p.CanCollide = true end end end
         end
         notify("NoClip", v and "ON" or "OFF")
     end,
@@ -128,10 +142,7 @@ tab1:CreateToggle({
         if v then
             if h then h.MaxHealth, h.Health = math.huge, math.huge end
             conns["godmode"] = RunService.Heartbeat:Connect(function()
-                if godmode then
-                    local hum = getHum()
-                    if hum then hum.MaxHealth, hum.Health = math.huge, math.huge end
-                end
+                if godmode then local hum = getHum() if hum then hum.MaxHealth, hum.Health = math.huge, math.huge end end
             end)
         else
             if h then h.MaxHealth, h.Health = 100, 100 end
@@ -178,16 +189,12 @@ tab1:CreateToggle({
         disconn("infjump")
         if v then
             conns["infjump"] = UserInputService.JumpRequest:Connect(function()
-                local h = getHum()
-                if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+                local h = getHum() if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
             end)
         end
         notify("Inf Jump", v and "ON" or "OFF")
     end,
 })
-
-local flying = false
-local flyspeed = 50
 
 tab1:CreateToggle({
     Name = "Fly",
@@ -198,23 +205,11 @@ tab1:CreateToggle({
         disconn("fly")
         local r = getRoot()
         if v and r then
-            local bg = Instance.new("BodyGyro")
-            bg.Name = "twg"
-            bg.P = 9e4
-            bg.maxTorque = Vector3.new(9e9, 9e9, 9e9)
-            bg.cframe = r.CFrame
-            bg.Parent = r
-            
-            local bv = Instance.new("BodyVelocity")
-            bv.Name = "twv"
-            bv.Velocity = Vector3.new(0, 0, 0)
-            bv.maxForce = Vector3.new(9e9, 9e9, 9e9)
-            bv.Parent = r
-            
+            local bg = Instance.new("BodyGyro") bg.Name = "twg" bg.P = 9e4 bg.maxTorque = Vector3.new(9e9, 9e9, 9e9) bg.cframe = r.CFrame bg.Parent = r
+            local bv = Instance.new("BodyVelocity") bv.Name = "twv" bv.Velocity = Vector3.new(0, 0, 0) bv.maxForce = Vector3.new(9e9, 9e9, 9e9) bv.Parent = r
             conns["fly"] = RunService.RenderStepped:Connect(function()
                 if flying and r then
-                    local g = r:FindFirstChild("twg")
-                    local vel = r:FindFirstChild("twv")
+                    local g, vel = r:FindFirstChild("twg"), r:FindFirstChild("twv")
                     if g and vel then
                         g.cframe = Camera.CFrame
                         local dir = Vector3.new(0, 0, 0)
@@ -230,13 +225,11 @@ tab1:CreateToggle({
             end)
         else
             if r then
-                local g = r:FindFirstChild("twg")
-                local vel = r:FindFirstChild("twv")
-                if g then g:Destroy() end
-                if vel then vel:Destroy() end
+                local g, vel = r:FindFirstChild("twg"), r:FindFirstChild("twv")
+                if g then g:Destroy() end if vel then vel:Destroy() end
             end
         end
-        notify("Fly", v and "ON (WASD+Space/Ctrl)" or "OFF")
+        notify("Fly", v and "ON" or "OFF")
     end,
 })
 
@@ -244,66 +237,111 @@ tab1:CreateSlider({
     Name = "Fly Speed",
     Range = {10, 200},
     Increment = 5,
-    Suffix = "",
     CurrentValue = 50,
     Flag = "flyspeed",
     Callback = function(v) flyspeed = v end,
 })
 
 local tab2 = Window:CreateTab("Combat", 4483362458)
-tab2:CreateSection("ESP")
+tab2:CreateSection("ESP Avancé")
+
+local function getHealthColor(pct)
+    if pct > 75 then return Color3.fromRGB(0, 255, 0)
+    elseif pct > 50 then return Color3.fromRGB(255, 255, 0)
+    elseif pct > 25 then return Color3.fromRGB(255, 165, 0)
+    else return Color3.fromRGB(255, 0, 0) end
+end
 
 local function setupEsp(plr)
     if plr == LocalPlayer then return end
     
     local function create(char)
         if not char then return end
+        local root = char:WaitForChild("HumanoidRootPart", 5)
         local head = char:WaitForChild("Head", 5)
-        if not head then return end
+        local hum = char:WaitForChild("Humanoid", 5)
+        if not root or not head or not hum then return end
         
-        local old = head:FindFirstChild("twesp")
-        if old then old:Destroy() end
+        for _, v in pairs(char:GetChildren()) do if v.Name == "twesp" or v.Name == "twhl" then v:Destroy() end end
         
         local bb = Instance.new("BillboardGui")
         bb.Name = "twesp"
-        bb.Adornee = head
-        bb.Size = UDim2.new(0, 100, 0, 40)
-        bb.StudsOffset = Vector3.new(0, 2, 0)
+        bb.Adornee = root
+        bb.Size = UDim2.new(0, 200, 0, 50)
+        bb.StudsOffset = Vector3.new(0, 3, 0)
         bb.AlwaysOnTop = true
-        bb.Parent = head
+        bb.Parent = char
+        
+        local container = Instance.new("Frame")
+        container.Name = "c"
+        container.Size = UDim2.new(1, 0, 1, 0)
+        container.BackgroundTransparency = 1
+        container.Parent = bb
         
         local nm = Instance.new("TextLabel")
         nm.Name = "n"
-        nm.Size = UDim2.new(1, 0, 0.5, 0)
+        nm.Size = UDim2.new(1, 0, 0, 16)
+        nm.Position = UDim2.new(0, 0, 0, 0)
         nm.BackgroundTransparency = 1
         nm.TextColor3 = espColor
         nm.TextStrokeTransparency = 0
+        nm.TextStrokeColor3 = Color3.new(0, 0, 0)
         nm.Font = Enum.Font.GothamBold
         nm.TextSize = 14
         nm.Text = plr.Name
-        nm.Parent = bb
+        nm.Parent = container
         
-        local hp = Instance.new("TextLabel")
-        hp.Name = "h"
-        hp.Size = UDim2.new(1, 0, 0.5, 0)
-        hp.Position = UDim2.new(0, 0, 0.5, 0)
-        hp.BackgroundTransparency = 1
-        hp.TextColor3 = Color3.fromRGB(0, 255, 0)
-        hp.TextStrokeTransparency = 0
-        hp.Font = Enum.Font.GothamBold
-        hp.TextSize = 12
-        hp.Parent = bb
+        local hpBg = Instance.new("Frame")
+        hpBg.Name = "hpbg"
+        hpBg.Size = UDim2.new(0.6, 0, 0, 6)
+        hpBg.Position = UDim2.new(0.2, 0, 0, 18)
+        hpBg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        hpBg.BorderSizePixel = 0
+        hpBg.Parent = container
+        Instance.new("UICorner", hpBg).CornerRadius = UDim.new(0, 3)
+        
+        local hpBar = Instance.new("Frame")
+        hpBar.Name = "hp"
+        hpBar.Size = UDim2.new(1, 0, 1, 0)
+        hpBar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        hpBar.BorderSizePixel = 0
+        hpBar.Parent = hpBg
+        Instance.new("UICorner", hpBar).CornerRadius = UDim.new(0, 3)
+        
+        local hpTxt = Instance.new("TextLabel")
+        hpTxt.Name = "htxt"
+        hpTxt.Size = UDim2.new(1, 0, 0, 14)
+        hpTxt.Position = UDim2.new(0, 0, 0, 26)
+        hpTxt.BackgroundTransparency = 1
+        hpTxt.TextColor3 = Color3.new(1, 1, 1)
+        hpTxt.TextStrokeTransparency = 0
+        hpTxt.Font = Enum.Font.Gotham
+        hpTxt.TextSize = 12
+        hpTxt.Parent = container
+        
+        local distTxt = Instance.new("TextLabel")
+        distTxt.Name = "dist"
+        distTxt.Size = UDim2.new(1, 0, 0, 12)
+        distTxt.Position = UDim2.new(0, 0, 0, 40)
+        distTxt.BackgroundTransparency = 1
+        distTxt.TextColor3 = Color3.fromRGB(200, 200, 200)
+        distTxt.TextStrokeTransparency = 0
+        distTxt.Font = Enum.Font.Gotham
+        distTxt.TextSize = 11
+        distTxt.Parent = container
         
         local hl = Instance.new("Highlight")
         hl.Name = "twhl"
         hl.FillColor = espColor
-        hl.FillTransparency = 0.8
+        hl.FillTransparency = 0.7
         hl.OutlineColor = espColor
+        hl.OutlineTransparency = 0
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
         hl.Parent = char
         
-        espObjs[plr.Name] = {bb = bb, hl = hl, hp = hp}
+        espObjs[plr.Name] = {bb = bb, hl = hl, hpBar = hpBar, hpTxt = hpTxt, distTxt = distTxt, nm = nm, char = char}
         bb.Enabled = esp
-        hl.Enabled = esp
+        hl.Enabled = esp and espBox
     end
     
     if plr.Character then create(plr.Character) end
@@ -313,27 +351,59 @@ end
 local function removeEsp(plr)
     local o = espObjs[plr.Name]
     if o then
-        if o.bb then pcall(function() o.bb:Destroy() end) end
-        if o.hl then pcall(function() o.hl:Destroy() end) end
+        pcall(function() if o.bb then o.bb:Destroy() end end)
+        pcall(function() if o.hl then o.hl:Destroy() end end)
         espObjs[plr.Name] = nil
     end
 end
 
 local function updateEsp()
+    local myRoot = getRoot()
     for _, plr in pairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
             local o = espObjs[plr.Name]
-            if o then
-                if o.bb then o.bb.Enabled = esp end
-                if o.hl then o.hl.Enabled = esp end
-                if esp and plr.Character then
-                    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-                    if hum and o.hp then
-                        local pct = (hum.Health / hum.MaxHealth) * 100
-                        o.hp.Text = math.floor(hum.Health) .. " HP"
-                        if pct > 66 then o.hp.TextColor3 = Color3.fromRGB(0, 255, 0)
-                        elseif pct > 33 then o.hp.TextColor3 = Color3.fromRGB(255, 255, 0)
-                        else o.hp.TextColor3 = Color3.fromRGB(255, 0, 0) end
+            if o and o.char then
+                local show = esp and not isTeammate(plr)
+                if o.bb then o.bb.Enabled = show end
+                if o.hl then o.hl.Enabled = show and espBox end
+                
+                if show then
+                    local hum = o.char:FindFirstChildOfClass("Humanoid")
+                    local root = o.char:FindFirstChild("HumanoidRootPart")
+                    
+                    if hum and root then
+                        local pct = math.clamp((hum.Health / hum.MaxHealth) * 100, 0, 100)
+                        local col = getHealthColor(pct)
+                        
+                        if o.hpBar then
+                            o.hpBar.Size = UDim2.new(pct / 100, 0, 1, 0)
+                            o.hpBar.BackgroundColor3 = col
+                        end
+                        
+                        if o.hpTxt and espHealth then
+                            o.hpTxt.Text = math.floor(hum.Health) .. "/" .. math.floor(hum.MaxHealth) .. " HP"
+                            o.hpTxt.Visible = true
+                        elseif o.hpTxt then
+                            o.hpTxt.Visible = false
+                        end
+                        
+                        if o.distTxt and espDist and myRoot then
+                            local dist = (myRoot.Position - root.Position).Magnitude
+                            o.distTxt.Text = "[" .. math.floor(dist) .. "m]"
+                            o.distTxt.Visible = true
+                        elseif o.distTxt then
+                            o.distTxt.Visible = false
+                        end
+                        
+                        if o.nm then
+                            o.nm.Visible = espName
+                            o.nm.TextColor3 = espColor
+                        end
+                        
+                        if o.hl then
+                            o.hl.FillColor = espColor
+                            o.hl.OutlineColor = espColor
+                        end
                     end
                 end
             end
@@ -349,52 +419,120 @@ tab2:CreateToggle({
     Name = "ESP",
     CurrentValue = false,
     Flag = "esp",
-    Callback = function(v)
-        esp = v
-        updateEsp()
-        notify("ESP", v and "ON" or "OFF")
-    end,
+    Callback = function(v) esp = v updateEsp() notify("ESP", v and "ON" or "OFF") end,
+})
+
+tab2:CreateToggle({
+    Name = "ESP Box/Highlight",
+    CurrentValue = true,
+    Flag = "espbox",
+    Callback = function(v) espBox = v end,
+})
+
+tab2:CreateToggle({
+    Name = "ESP Nom",
+    CurrentValue = true,
+    Flag = "espname",
+    Callback = function(v) espName = v end,
+})
+
+tab2:CreateToggle({
+    Name = "ESP Santé",
+    CurrentValue = true,
+    Flag = "esphealth",
+    Callback = function(v) espHealth = v end,
+})
+
+tab2:CreateToggle({
+    Name = "ESP Distance",
+    CurrentValue = true,
+    Flag = "espdist",
+    Callback = function(v) espDist = v end,
 })
 
 tab2:CreateColorPicker({
     Name = "Couleur ESP",
     Color = Color3.fromRGB(255, 0, 0),
     Flag = "espcolor",
-    Callback = function(c)
-        espColor = c
-        for _, o in pairs(espObjs) do
-            if o.hl then o.hl.FillColor, o.hl.OutlineColor = c, c end
-            if o.bb then local n = o.bb:FindFirstChild("n") if n then n.TextColor3 = c end end
-        end
-    end,
+    Callback = function(c) espColor = c end,
 })
 
-tab2:CreateSection("AimBot")
+tab2:CreateSection("AimBot Pro")
+
+local fovCircle = Instance.new("ScreenGui")
+fovCircle.Name = "twfov"
+fovCircle.ResetOnSpawn = false
+fovCircle.IgnoreGuiInset = true
+pcall(function() fovCircle.Parent = CoreGui end)
+if not fovCircle.Parent then fovCircle.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local fovFrame = Instance.new("Frame")
+fovFrame.Name = "fov"
+fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+fovFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+fovFrame.BackgroundTransparency = 1
+fovFrame.Parent = fovCircle
+
+local fovImage = Instance.new("ImageLabel")
+fovImage.Name = "circle"
+fovImage.AnchorPoint = Vector2.new(0.5, 0.5)
+fovImage.Position = UDim2.new(0.5, 0, 0.5, 0)
+fovImage.BackgroundTransparency = 1
+fovImage.Image = "rbxassetid://3570695787"
+fovImage.ImageColor3 = Color3.new(1, 1, 1)
+fovImage.ImageTransparency = 0.7
+fovImage.Parent = fovFrame
+
+fovCircle.Enabled = false
+
+local function updateFovCircle()
+    fovImage.Size = UDim2.new(0, aimFov * 2, 0, aimFov * 2)
+    fovCircle.Enabled = aimbot and aimShowFov
+end
+
+local function getPredictedPos(part, velocity)
+    if not aimPrediction or aimPrediction == 0 then return part.Position end
+    return part.Position + (velocity * aimPrediction)
+end
 
 local function findTarget()
     local best = aimFov
     local target = nil
+    local targetVel = Vector3.new(0, 0, 0)
     local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     
     for _, plr in pairs(Players:GetPlayers()) do
         if plr == LocalPlayer then continue end
+        if isTeammate(plr) then continue end
+        
         local c = plr.Character
         if not c then continue end
-        local head = c:FindFirstChild("Head")
-        local hum = c:FindFirstChildOfClass("Humanoid")
-        if not head or not hum or hum.Health <= 0 then continue end
         
-        local pos, vis = Camera:WorldToViewportPoint(head.Position)
+        local part = c:FindFirstChild(aimPart) or c:FindFirstChild("Head")
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        local root = c:FindFirstChild("HumanoidRootPart")
+        
+        if not part or not hum or hum.Health <= 0 then continue end
+        if not isVisible(part) then continue end
+        
+        local vel = root and root.Velocity or Vector3.new(0, 0, 0)
+        local predictedPos = getPredictedPos(part, vel)
+        local pos, vis = Camera:WorldToViewportPoint(predictedPos)
+        
         if not vis then continue end
         
         local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
         if dist < best then
             best = dist
-            target = head
+            target = part
+            targetVel = vel
         end
     end
-    return target
+    return target, targetVel
 end
+
+local currentTarget = nil
+local targetLock = false
 
 tab2:CreateToggle({
     Name = "AimBot",
@@ -402,8 +540,40 @@ tab2:CreateToggle({
     Flag = "aimbot",
     Callback = function(v)
         aimbot = v
-        notify("AimBot", v and "ON (clic droit)" or "OFF")
+        updateFovCircle()
+        notify("AimBot", v and "ON" or "OFF")
     end,
+})
+
+tab2:CreateToggle({
+    Name = "Target Lock",
+    Description = "Verrouille sur la cible",
+    CurrentValue = false,
+    Flag = "aimlock",
+    Callback = function(v) targetLock = v if not v then currentTarget = nil end end,
+})
+
+tab2:CreateToggle({
+    Name = "Afficher FOV",
+    CurrentValue = true,
+    Flag = "showfov",
+    Callback = function(v) aimShowFov = v updateFovCircle() end,
+})
+
+tab2:CreateToggle({
+    Name = "Wall Check",
+    Description = "Ignore les cibles derrière les murs",
+    CurrentValue = true,
+    Flag = "wallcheck",
+    Callback = function(v) aimWallCheck = v end,
+})
+
+tab2:CreateToggle({
+    Name = "Team Check",
+    Description = "Ignore les coéquipiers",
+    CurrentValue = false,
+    Flag = "teamcheck",
+    Callback = function(v) aimTeamCheck = v end,
 })
 
 tab2:CreateSlider({
@@ -411,19 +581,54 @@ tab2:CreateSlider({
     Range = {50, 500},
     Increment = 10,
     Suffix = " px",
-    CurrentValue = 100,
+    CurrentValue = 150,
     Flag = "aimfov",
-    Callback = function(v) aimFov = v end,
+    Callback = function(v) aimFov = v updateFovCircle() end,
 })
 
 tab2:CreateSlider({
-    Name = "Smooth",
+    Name = "Smoothness",
+    Description = "1 = Snap, 10 = Très fluide",
     Range = {1, 10},
-    Increment = 1,
-    Suffix = "x",
-    CurrentValue = 3,
+    Increment = 0.5,
+    CurrentValue = 5,
     Flag = "aimsmooth",
     Callback = function(v) aimSmooth = v end,
+})
+
+tab2:CreateSlider({
+    Name = "Prédiction",
+    Description = "Anticipe le mouvement",
+    Range = {0, 0.3},
+    Increment = 0.01,
+    CurrentValue = 0.12,
+    Flag = "aimpred",
+    Callback = function(v) aimPrediction = v end,
+})
+
+tab2:CreateDropdown({
+    Name = "Partie visée",
+    Options = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
+    CurrentOption = {"Head"},
+    Flag = "aimpart",
+    Callback = function(o) aimPart = o[1] end,
+})
+
+tab2:CreateDropdown({
+    Name = "Touche AimBot",
+    Options = {"Clic Droit", "Clic Gauche", "Shift", "E", "Q"},
+    CurrentOption = {"Clic Droit"},
+    Flag = "aimkey",
+    Callback = function(o)
+        local keys = {
+            ["Clic Droit"] = Enum.UserInputType.MouseButton2,
+            ["Clic Gauche"] = Enum.UserInputType.MouseButton1,
+            ["Shift"] = Enum.KeyCode.LeftShift,
+            ["E"] = Enum.KeyCode.E,
+            ["Q"] = Enum.KeyCode.Q
+        }
+        aimKey = keys[o[1]] or Enum.UserInputType.MouseButton2
+    end,
 })
 
 local tab3 = Window:CreateTab("Visuels", 4483362458)
@@ -454,11 +659,7 @@ local function mkLine(sx, sy, px, py)
     return l
 end
 
-local chT = mkLine(2, 10, 0, -8)
-local chB = mkLine(2, 10, 0, 8)
-local chL = mkLine(10, 2, -8, 0)
-local chR = mkLine(10, 2, 8, 0)
-local chD = mkLine(4, 4, 0, 0)
+local chT, chB, chL, chR, chD = mkLine(2, 10, 0, -8), mkLine(2, 10, 0, 8), mkLine(10, 2, -8, 0), mkLine(10, 2, 8, 0), mkLine(4, 4, 0, 0)
 chGui.Enabled = false
 
 local function updChSize()
@@ -470,11 +671,7 @@ local function updChSize()
 end
 
 local function updChColor()
-    chT.BackgroundColor3 = chColor
-    chB.BackgroundColor3 = chColor
-    chL.BackgroundColor3 = chColor
-    chR.BackgroundColor3 = chColor
-    chD.BackgroundColor3 = chColor
+    chT.BackgroundColor3, chB.BackgroundColor3, chL.BackgroundColor3, chR.BackgroundColor3, chD.BackgroundColor3 = chColor, chColor, chColor, chColor, chColor
 end
 
 tab3:CreateToggle({
@@ -509,21 +706,12 @@ tab3:CreateToggle({
     Flag = "fullbright",
     Callback = function(v)
         if v then
-            Lighting.Brightness = 10
-            Lighting.ClockTime = 12
-            Lighting.FogEnd = 100000
-            Lighting.FogStart = 100000
+            Lighting.Brightness, Lighting.ClockTime, Lighting.FogEnd, Lighting.FogStart = 10, 12, 100000, 100000
             Lighting.GlobalShadows = false
-            Lighting.Ambient = Color3.fromRGB(178, 178, 178)
-            Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+            Lighting.Ambient, Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178), Color3.fromRGB(178, 178, 178)
         else
-            Lighting.Brightness = origLight.Brightness
-            Lighting.ClockTime = origLight.ClockTime
-            Lighting.FogEnd = origLight.FogEnd
-            Lighting.FogStart = origLight.FogStart
-            Lighting.GlobalShadows = origLight.GlobalShadows
-            Lighting.Ambient = origLight.Ambient
-            Lighting.OutdoorAmbient = origLight.OutdoorAmbient
+            Lighting.Brightness, Lighting.ClockTime, Lighting.FogEnd, Lighting.FogStart = origLight.Brightness, origLight.ClockTime, origLight.FogEnd, origLight.FogStart
+            Lighting.GlobalShadows, Lighting.Ambient, Lighting.OutdoorAmbient = origLight.GlobalShadows, origLight.Ambient, origLight.OutdoorAmbient
         end
         notify("Fullbright", v and "ON" or "OFF")
     end,
@@ -559,7 +747,6 @@ tab4:CreateDropdown({
     Options = {"Spawn", "Centre", "Nord", "Sud", "Est", "Ouest", "Haut", "Très Haut"},
     CurrentOption = {"Spawn"},
     Flag = "lieu",
-    MultipleOptions = false,
     Callback = function(o) lieuSel = o[1] end,
 })
 
@@ -567,65 +754,29 @@ tab4:CreateButton({
     Name = "Téléporter",
     Callback = function()
         local r = getRoot()
-        if r and lieux[lieuSel] then
-            r.CFrame = CFrame.new(lieux[lieuSel])
-            notify("TP", lieuSel)
-        end
+        if r and lieux[lieuSel] then r.CFrame = CFrame.new(lieux[lieuSel]) notify("TP", lieuSel) end
     end,
 })
 
 tab4:CreateSection("Coordonnées")
 local cx, cy, cz = 0, 5, 0
 
-tab4:CreateInput({
-    Name = "X",
-    CurrentValue = "0",
-    PlaceholderText = "0",
-    NumbersOnly = true,
-    Flag = "cx",
-    Callback = function(t) cx = tonumber(t) or 0 end,
-})
-
-tab4:CreateInput({
-    Name = "Y",
-    CurrentValue = "5",
-    PlaceholderText = "5",
-    NumbersOnly = true,
-    Flag = "cy",
-    Callback = function(t) cy = tonumber(t) or 5 end,
-})
-
-tab4:CreateInput({
-    Name = "Z",
-    CurrentValue = "0",
-    PlaceholderText = "0",
-    NumbersOnly = true,
-    Flag = "cz",
-    Callback = function(t) cz = tonumber(t) or 0 end,
-})
+tab4:CreateInput({Name = "X", CurrentValue = "0", PlaceholderText = "0", NumbersOnly = true, Flag = "cx", Callback = function(t) cx = tonumber(t) or 0 end})
+tab4:CreateInput({Name = "Y", CurrentValue = "5", PlaceholderText = "5", NumbersOnly = true, Flag = "cy", Callback = function(t) cy = tonumber(t) or 5 end})
+tab4:CreateInput({Name = "Z", CurrentValue = "0", PlaceholderText = "0", NumbersOnly = true, Flag = "cz", Callback = function(t) cz = tonumber(t) or 0 end})
 
 tab4:CreateButton({
     Name = "TP Coords",
     Callback = function()
         local r = getRoot()
-        if r then
-            r.CFrame = CFrame.new(cx, cy, cz)
-            notify("TP", string.format("%d, %d, %d", cx, cy, cz))
-        end
+        if r then r.CFrame = CFrame.new(cx, cy, cz) notify("TP", string.format("%d, %d, %d", cx, cy, cz)) end
     end,
 })
 
 tab4:CreateSection("Joueur")
 local tpTarget = ""
 
-tab4:CreateInput({
-    Name = "Pseudo",
-    CurrentValue = "",
-    PlaceholderText = "Nom",
-    NumbersOnly = false,
-    Flag = "tptarget",
-    Callback = function(t) tpTarget = t end,
-})
+tab4:CreateInput({Name = "Pseudo", CurrentValue = "", PlaceholderText = "Nom", NumbersOnly = false, Flag = "tptarget", Callback = function(t) tpTarget = t end})
 
 tab4:CreateButton({
     Name = "TP Joueur",
@@ -633,13 +784,8 @@ tab4:CreateButton({
         local t = Players:FindFirstChild(tpTarget)
         if t and t.Character and t.Character:FindFirstChild("HumanoidRootPart") then
             local r = getRoot()
-            if r then
-                r.CFrame = t.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
-                notify("TP", tpTarget)
-            end
-        else
-            notify("Erreur", "Joueur introuvable")
-        end
+            if r then r.CFrame = t.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3) notify("TP", tpTarget) end
+        else notify("Erreur", "Joueur introuvable") end
     end,
 })
 
@@ -657,29 +803,18 @@ if VirtualUser then
 end
 
 tab5:CreateParagraph({Title = "Anti-AFK", Content = "Actif automatiquement"})
-
 tab5:CreateSection("Interface")
 
-tab5:CreateKeybind({
-    Name = "Toggle Menu",
-    CurrentKeybind = "RightShift",
-    HoldToInteract = false,
-    Flag = "keybind",
-    Callback = function() end,
-})
+tab5:CreateKeybind({Name = "Toggle Menu", CurrentKeybind = "RightShift", HoldToInteract = false, Flag = "keybind", Callback = function() end})
 
 tab5:CreateSection("Info")
-
-tab5:CreateParagraph({Title = "TheWizard", Content = "v2.2"})
+tab5:CreateParagraph({Title = "TheWizard", Content = "v3.0 Pro"})
 
 tab5:CreateButton({
     Name = "Coords",
     Callback = function()
         local r = getRoot()
-        if r then
-            local p = r.Position
-            notify("Position", string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z), 5)
-        end
+        if r then local p = r.Position notify("Position", string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z), 5) end
     end,
 })
 
@@ -687,34 +822,66 @@ tab5:CreateButton({
     Name = "Fermer",
     Callback = function()
         for _, c in pairs(conns) do pcall(function() c:Disconnect() end) end
-        for _, o in pairs(espObjs) do
-            pcall(function() if o.bb then o.bb:Destroy() end if o.hl then o.hl:Destroy() end end)
-        end
+        for _, o in pairs(espObjs) do pcall(function() if o.bb then o.bb:Destroy() end if o.hl then o.hl:Destroy() end end) end
         local r = getRoot()
-        if r then
-            local g = r:FindFirstChild("twg")
-            local v = r:FindFirstChild("twv")
-            if g then g:Destroy() end
-            if v then v:Destroy() end
-        end
+        if r then local g, v = r:FindFirstChild("twg"), r:FindFirstChild("twv") if g then g:Destroy() end if v then v:Destroy() end end
         pcall(function() chGui:Destroy() end)
+        pcall(function() fovCircle:Destroy() end)
         pcall(function() RayfieldLibrary:Destroy() end)
     end,
 })
 
-conns["main"] = RunService.RenderStepped:Connect(function()
-    if aimbot and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-        local t = findTarget()
-        if t then
-            local pos = Camera:WorldToViewportPoint(t.Position)
-            local c = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-            local dx = (pos.X - c.X) / (aimSmooth * 50)
-            local dy = (pos.Y - c.Y) / (aimSmooth * 50)
-            Camera.CFrame = Camera.CFrame * CFrame.Angles(math.rad(-dy), math.rad(-dx), 0)
+local function isAimKeyPressed()
+    if typeof(aimKey) == "EnumItem" then
+        if aimKey.EnumType == Enum.UserInputType then
+            return UserInputService:IsMouseButtonPressed(aimKey)
+        else
+            return UserInputService:IsKeyDown(aimKey)
         end
     end
+    return false
+end
+
+conns["main"] = RunService.RenderStepped:Connect(function()
+    if aimbot then
+        updateFovCircle()
+        
+        if isAimKeyPressed() then
+            local target, vel
+            
+            if targetLock and currentTarget and currentTarget.Parent then
+                local hum = currentTarget.Parent:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 and isVisible(currentTarget) then
+                    target = currentTarget
+                    vel = currentTarget.Parent:FindFirstChild("HumanoidRootPart") and currentTarget.Parent.HumanoidRootPart.Velocity or Vector3.new(0,0,0)
+                else
+                    currentTarget = nil
+                    target, vel = findTarget()
+                end
+            else
+                target, vel = findTarget()
+            end
+            
+            if targetLock and target then currentTarget = target end
+            
+            if target then
+                local predictedPos = getPredictedPos(target, vel or Vector3.new(0,0,0))
+                local pos = Camera:WorldToViewportPoint(predictedPos)
+                local c = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                
+                local smoothFactor = 11 - aimSmooth
+                local dx = (pos.X - c.X) / (smoothFactor * 8)
+                local dy = (pos.Y - c.Y) / (smoothFactor * 8)
+                
+                Camera.CFrame = Camera.CFrame * CFrame.Angles(math.rad(-dy), math.rad(-dx), 0)
+            end
+        else
+            if not targetLock then currentTarget = nil end
+        end
+    end
+    
     if esp then updateEsp() end
 end)
 
-notify("TheWizard", "Chargé", 5)
+notify("TheWizard", "v3.0 Pro chargé", 5)
 pcall(function() RayfieldLibrary:LoadConfiguration() end)
